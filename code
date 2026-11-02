@@ -1,0 +1,117 @@
+sudo nmcli connection add con-name "BackupNet" ifname eth1 type ethernet ip4 192.168.56.10/24
+sudo nmcli connection up "BackupNet"sudo apt update
+sudo apt install -y rsync openssh-server openssh-client cron lvm2
+sudo systemctl enable --now ssh cron
+
+On Client 1:
+sudo nmcli connection add con-name "BackupNet" ifname eth1 type ethernet ip4 192.168.56.11/24
+sudo nmcli connection up "BackupNet"sudo apt update
+sudo apt install -y openssh-server
+sudo systemctl enable --now ssh
+
+On Client 2:
+sudo nmcli connection add con-name "BackupNet" ifname eth1 type ethernet ip4 192.168.56.12/24
+sudo nmcli connection up "BackupNet"
+sudo apt update
+sudo apt install -y openssh-server
+sudo systemctl enable --now ssh
+
+On the Backup Server:
+sudo groupadd backupgrp
+sudo useradd -m -s /bin/bash -G backupgrp backupadmin
+sudo passwd backupadmin
+
+On Client 1 AND Client 2:
+sudo adduser backupuser
+
+On the Server:
+sudo pvcreate /dev/sdb
+sudo vgcreate backupvg /dev/sdb
+sudo lvcreate -l 100%FREE -n backuplv backupvg
+sudo mkfs.ext4 -L BACKUPVOL /dev/backupvg/backuplv
+sudo mkdir -p /srv/backups
+sudo mount /dev/backupvg/backuplv /srv/backups
+sudo chown -R backupadmin:backupgrp /srv/backups
+sudo chmod 2770 /srv/backups
+sudo su - backupadmin
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C "backupserver"
+ssh-copy-id -i ~/.ssh/id_ed25519.pub backupuser@192.168.56.11
+ssh-copy-id -i ~/.ssh/id_ed25519.pub backupuser@192.168.56.12
+
+On Client 1 AND Client 2:
+sudo sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+sudo sed -i 's/^#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config
+sudo systemctl restart ssh
+
+On the Server:
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow from 192.168.56.0/24 to any port 22 proto tcp
+sudo ufw --force enable
+sudo nmcli connection delete "BackupNet"
+ip link
+sudo nmcli connection add con-name "BackupNet" ifname eth0 type ethernet ip4 192.168.56.11/24
+sudo nmcli connection up "BackupNet"
+sudo groupadd backupgrp
+sudo useradd -m -s /bin/bash -G backupgrp backupadmin
+sudo passwd backupadmin
+
+On Client 1:
+sudo adduser backupuser
+
+On Client 2:
+sudo adduser backupuser
+
+On the Server:
+sudo pvcreate /dev/sdb
+sudo vgcreate backupvg /dev/sdb
+sudo lvcreate -l 100%FREE -n backuplv backupvg
+sudo mkfs.ext4 -L BACKUPVOL /dev/backupvg/backuplv
+sudo mkdir -p /srv/backups
+sudo mount /dev/backupvg/backuplv /srv/backups
+sudo chown -R backupadmin:backupgrp /srv/backups
+sudo chmod 2770 /srv/backups
+sudo su - backupadmin
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C "backupserver"
+ssh-copy-id -i ~/.ssh/id_ed25519.pub backupuser@192.168.56.11
+ssh-copy-id -i ~/.ssh/id_ed25519.pub backupuser@192.168.56.12
+sudo nano /etc/ssh/sshd_config
+sudo systemctl restart ssh
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow from 192.168.56.0/24 to any port 22 proto tcp
+sudo ufw enable
+
+
+On Client 1 AND Client 2:
+su - backupuser
+mkdir -p ~/important_data
+echo "This is a test file to prove the backup works!" > ~/important_data/test.txt
+
+On the Server:
+sudo su - backupadmin
+mkdir -p /srv/backups/client1
+mkdir -p /srv/backups/client2
+nano ~/run_backups.sh
+
+#!/bin/bash
+
+# Define variables
+SSH_KEY="/home/backupadmin/.ssh/id_ed25519"
+DESTINATION="/srv/backups"
+
+# Backup Client 1
+echo "Starting backup for Client 1..."
+rsync -avz -e "ssh -i $SSH_KEY" backupuser@192.168.56.11:/home/backupuser/important_data/ $DESTINATION/client1/
+
+# Backup Client 2
+echo "Starting backup for Client 2..."
+rsync -avz -e "ssh -i $SSH_KEY" backupuser@192.168.56.12:/home/backupuser/important_data/ $DESTINATION/client2/
+
+echo "All backups completed successfully!"
+
+
+chmod +x ~/run_backups.sh
+./run_backups.sh
+crontab -e
+0 2 * * * /home/backupadmin/run_backups.sh >> /home/backupadmin/backup.log 2>&1
